@@ -1,0 +1,712 @@
+---
+title: "PStat 131 Final Project 2016 Election"
+author: "Stevyn Fessler, Chris Bell, Xi Sun"
+date: "3/23/2018"
+output: pdf_document
+---
+
+
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(plyr)
+library(ggplot2)
+library(cluster)
+library(NbClust)
+library(tree)
+library(randomForest)
+library(maptree)
+library(ROCR)
+library(class)
+library(rpart)
+```
+
+## Question 1
+
+There are many reasons as to why predicting the outcome of an election is so hard.  One of the main reasons that it is so difficult is that the president is chosen on a national level, but states vote seperately.  Another reason is that because no one knows the result untill after it is an un observed variable.  The data the polls brings in deals with how people think they'll vote but not how they actually vote.  One other reason is that there are many different polls at state and national levels with varying amounts of credibility, yet they all have to be considered.  These are all some of the reasons that predicting the election is so difficult.
+
+## Question 2
+
+Nate Silver did a couple of things that were unique in his approach include a method in which he would calculate the probability that Obama would win if the election was called on that specific day.  Another thing that he did that was unique was when he saw a nationwide shift, he would take into account the levels of support that a candidate has in certain regions before applying the shift to those regions.
+
+## Question 3
+
+There were many explanations as to what could have gone wrong in 2016.  A few of the explanations given in the article were that while in is normal for polls to have error, in 2016 the error was all in the same direction.  Another reason is that the polls may have underestimated a certain demographic, particularly whites without college degrees.  This combined with the fact that Trump outperformed almost all of his swing state predictions.  One of the issues that relates to why election predicting is to hard is that Democrats had a lower than expected turnout.  This relates to how polls gather info on how they think they will vote but not how they will or if they will vote.  Some of the things that could be done to make future predictions better could include creating a heavier focus on swing states and making sure to use time scaling to see how the predictions change as time moves on and compare national shifts with state shifts in support.
+
+## Data Preparing
+
+```{r, warning=FALSE, message=FALSE}
+election.raw = read.csv("data/election/election.csv") %>% as.tbl
+census_meta = read.csv("data/census/metadata.csv", sep = ";") %>% as.tbl
+census = read.csv("data/census/census.csv") %>% as.tbl
+census$CensusTract = as.factor(census$CensusTract)
+```
+
+## Question 4
+
+```{r}
+election_federal <- subset(election.raw, election.raw$fips=="US")
+
+election_state <- c()
+for (i in 1:nrow(election.raw)){
+  for (j in 1:length(state.abb)){
+    if (election.raw$fips[i]==state.abb[j]){
+      election_state <- rbind(election_state, election.raw[i,])
+    }
+  }
+}
+
+abc <- rbind(election_federal, election_state)
+election <- election.raw[!(election.raw$fips %in% abc$fips),]
+
+head(election_federal)
+head(election_state)
+head(election)
+```
+
+## Question 5
+
+```{r}
+length(election_federal$candidate)
+
+ggplot(election_federal, aes(x=candidate, y=votes, fill=candidate)) + 
+  geom_bar(stat="identity") + 
+  guides(fill=FALSE) + 
+  theme(axis.text.x=element_text(angle=90, hjust=1, vjust=0.5))
+```
+The Graph below shows the names for 31 candidates in the 2016 election.  However, it also shows that only 5 of those candidates had enough votes to appear on the graph and of those five almost all of the votes went to Donald Trump or Hillary Clinton.
+
+
+## Question 6
+
+```{r, warning=FALSE, message=FALSE}
+pct.county <- ddply(election, 
+                    ~fips, 
+                    summarise, 
+                    candidate=candidate, 
+                    pct=votes/sum(votes),
+                    state =state,
+                    votes=votes,
+                    county = county)
+
+county_winner <- pct.county %>%
+  group_by(fips) %>%
+  top_n(n=1, wt=pct)
+
+head(county_winner)
+
+pct.state <- ddply(election_state, 
+                   ~fips, 
+                   summarise, 
+                   candidate=candidate, 
+                   pct=votes/sum(votes))
+
+state_winner <- pct.state %>%
+  group_by(fips) %>%
+  top_n(n=1, wt=pct)
+
+head(state_winner)
+```
+
+## Question 7
+
+```{r, warning=FALSE, message=FALSE}
+states <- map_data("state")
+
+ggplot(data = states) + 
+  geom_polygon(aes(x = long, y = lat, fill = region, group = group), color = "white") + 
+  coord_fixed(1.3) +
+  guides(fill=FALSE)
+
+counties <- map_data("county")
+
+ggplot(data=counties) + 
+  geom_polygon(aes(x=long, y=lat, fill=region, group=group), color="white") + 
+  coord_fixed(1.3) + 
+  guides(fill=FALSE)
+```
+
+## Question 8
+
+```{r, warning=FALSE, message=FALSE}
+fips <- state.abb[match(states$region, tolower(state.name))]
+
+states.fips <- data.frame(states, fips)
+
+states2 <- left_join(states.fips, state_winner, by="fips")
+
+ggplot(data = states) + 
+  geom_polygon(data=states2, 
+               aes(x=long, y=lat, fill=candidate, group=group), 
+               color = "white") + 
+  coord_fixed(1.3)
+```
+
+## Question 9
+
+```{r, warning=FALSE, message=FALSE}
+county <- counties
+
+county.split <- maps::county.fips %>%
+  separate(polyname, c("region", "subregion"), ",")
+
+county.split <- cbind(as.character(county.split[,1]), county.split[,2:3])
+
+colnames(county.split)[1] <- "fips"
+
+county2 <- left_join(county, county.split, by=c("region", "subregion"))
+county3 <- left_join(county2, county_winner, by="fips")
+
+ggplot(data = county3) + 
+  geom_polygon(data=county3, aes(x=long, y=lat, fill=candidate, group=group), color = "white") + 
+  coord_fixed(1.3) +
+  guides(fill=FALSE)
+```
+
+We will use the cleaned census data for visualization on question 10, therefore question 10 will appear after question 11.
+
+## Question 11 Part 1
+
+```{r, warning=FALSE, message=FALSE}
+census.del <- filter(census, complete.cases(census))
+
+Men <- (census.del$Men/census.del$TotalPop)*100
+Citizen <- (census.del$Citizen/census.del$TotalPop)*100
+Employed <- (census.del$Employed/census.del$TotalPop)*100
+
+census.del[, "Men"] <- Men
+census.del[, "Citizen"] <- Citizen
+census.del[, "Employed"] <- Employed
+
+Minority <- census.del$Hispanic + 
+            census.del$Black + 
+            census.del$Native + 
+            census.del$Asian + 
+            census.del$Pacific
+census.del <- data.frame(census.del, Minority)
+
+census.del <- census.del[, -which(names(census.del) %in% 
+                                    c("Walk", "PublicWork", "Construction"))]
+
+head(census.del)
+```
+
+## Question 11 Part 2
+
+```{r, warning=FALSE, message=FALSE}
+census.del2 <- census.del %>%
+  group_by(State, County) %>%
+  add_tally(sum(TotalPop))
+
+names(census.del2)[names(census.del2)=="n"] <- "CountyTotal"
+
+Weight <- census.del2$TotalPop/census.del2$CountyTotal
+
+census.subct <- data.frame(census.del2, Weight)
+
+```
+
+## Question 11 Part 3 & 4
+
+```{r, warning=FALSE, message=FALSE}
+census.ct <- census.subct %>%
+  group_by(State, County) %>%
+  summarise_at(vars(TotalPop:Weight), mean)
+head(census.ct)
+
+
+
+```
+
+## Question 10
+
+```{r, fig.width=8, fig.height=8}
+
+ggplot() + geom_point(data = census.ct, aes(Minority, IncomePerCap,color = census.ct$State), size = .5, alpha = .75) + labs(y = "Income Per Capita") + theme(legend.position="bottom") +  labs(color='States') + ggtitle("Minority Percent vs Income Per Capita")
+
+```
+
+The Scatterplot above shows the Income per Capita compared to the percentage of the population that are minorities.  Each point represents a unique county within either a state, DC, or Puerto Rico.  We can see that there is some slight correlation between income and percentage of minorities. The higher the percentage of minorities the less income per capita in a county.
+
+
+## Question 12
+
+```{r, warning=FALSE, message=FALSE}
+census.subct2 <- census.subct[, 4:ncol(census.subct)]
+pc.census.subct <- prcomp(census.subct2)
+pc.subct <- pc.census.subct$x
+subct.pc <- data.frame(pc.subct)
+head(subct.pc)
+
+summary(pc.census.subct)
+
+census.ct2 <- census.ct[, 3:ncol(census.ct)]
+pc.census.ct <- prcomp(census.ct2)
+pc.ct <- pc.census.ct$x
+ct.pc <- data.frame(pc.ct)
+head(ct.pc)
+
+summary(pc.census.ct)
+```
+
+The most Prominent Loadings are PC1 and PC2.
+
+
+
+## Question 13
+
+
+
+```{r, warning=FALSE, message=FALSE, fig.width=8, fig.height = 8}
+dist.census.ct <- dist(census.ct, method="euclidean")
+hc.census.ct <- hclust(dist.census.ct, method="complete")
+plot(hc.census.ct, main="HClust census.ct", labels = FALSE)
+hc.census.cut <- cutree(hc.census.ct, 10)
+plot(hc.census.cut, col=hc.census.cut, ylab = "", main = "Cut Tree census.ct")
+
+repeat.census.ct <- ct.pc[,1:5]
+repeat.dist.census.ct <- dist(repeat.census.ct, method="euclidean")
+repeat.hc.census.ct <- hclust(repeat.dist.census.ct, method="complete")
+plot(repeat.hc.census.ct, main="5 Principal Components", labels = FALSE)
+repeat.hc.census.cut <- cutree(repeat.hc.census.ct, 10)
+plot(repeat.hc.census.cut, col=repeat.hc.census.cut, ylab = "", main="Cut Tree 5 PCs")
+
+```
+
+## San Mateo clusters
+
+```{r}
+census.ct[which(census.ct$County == "San Mateo") ,]
+repeat.hc.census.cut[which(census.ct$County == "San Mateo")]
+
+#census.ct[which(hc.census.cut==2),]
+#census.ct[which(repeat.hc.census.cut==2),]
+```
+
+According to the result, we can see that in both census.ct and repeated with first 5 PCs in ct.pc, San Mateo county is in the same cluster. In this case, we can conclude that whether or not we are using the original data set or the data set with principle components, San Mateo county has similar features as other counties in the same clusters in both cases.
+
+By observing the result of two lines of code with "#"(since each contains 69 rows of dataframe, we will not print that out), we can assume that the similar features are total populations and employment information. Therefore, the first 5 PCs may have already contained those features for clustering which will result in the same clustering in both cases.
+
+
+
+
+
+
+
+
+
+
+## Classification
+
+```{r}
+tmpwinner <- county_winner %>% ungroup %>%
+  mutate(state = state.name[match(state, state.abb)]) %>%
+  mutate_at(vars(state, county), tolower) %>%
+  mutate(county = gsub(" county| columbia| city| parish", "", county))
+
+census.ct$State <- tolower(census.ct$State)
+
+tmpcensus <- census.ct %>%
+  mutate_at(vars(1, 2), tolower)
+
+election.cl <- tmpwinner %>%
+  left_join(tmpcensus, by = c("state"="State", "county"="County")) %>% 
+  na.omit
+
+attr(election.cl, "location") <- election.cl %>%
+  select(c(county, fips, state, votes, pct))
+
+election.cl <- election.cl %>%
+  select(-c(county, fips, state, votes, pct))
+
+set.seed(10) 
+n = nrow(election.cl)
+in.trn <- sample.int(n, 0.8*n) 
+trn.cl <- election.cl[in.trn,]
+tst.cl <- election.cl[-in.trn,]
+
+set.seed(20)
+nfold <- 10
+folds <- sample(cut(1:nrow(trn.cl), breaks=nfold, labels=FALSE))
+calc_error_rate <- function(predicted.value, true.value){
+  return(mean(true.value!=predicted.value))
+}
+records <- matrix(NA, nrow=3, ncol=2)
+colnames(records) <- c("train.error","test.error")
+rownames(records) <- c("tree","knn","lda")
+```
+
+## Question another 13
+
+```{r, fig.height = 8, fig.width = 8}
+trntree <- tree(candidate~., data = trn.cl)
+trncontrol <- tree.control(nobs=2456, minsize = 7, mindev = 1e-6)
+trntree <- tree(candidate~., data = trn.cl, control = trncontrol)
+summary(trntree)
+
+draw.tree(trntree, nodeinfo=TRUE, cex=.6)
+prunedtree <- prune.tree(trntree,best=15)
+summary(prunedtree)
+
+draw.tree(prunedtree, cex=0.5, nodeinfo=TRUE)
+good.test <- tst.cl$candidate
+cvtree <- cv.tree(trntree,rand=folds,prune.misclass, K=9)
+
+
+op <- par(mfrow = c(2,1))
+plot(cvtree$size,cvtree$dev, xlab = "Tree Size", ylab = "Deviance", main = "Tree Size Deviance")
+par(op)
+
+# best size is 23
+trntree.pruned <- prune.tree(trntree,best=23)
+```
+
+```{r}
+predictions <- predict(trntree.pruned, trn.cl, type="vector")
+for (i in 1:2456){
+  d = predictions[i,7]
+  predictions[i,7] <- ifelse(d < 0.5,'Hillary Clinton','Donald Trump')
+}
+
+c = list()
+for (i in 1:2456){
+  c[[length(c)+1]] <- predictions[i,7]
+}
+
+tree.train.error <- calc_error_rate(c, trn.cl$candidate)
+
+predictions2 <- predict(trntree.pruned, tst.cl, type="vector")
+for (i in 1:614){
+  d = predictions2[i,7]
+  predictions2[i,7] <- ifelse(d < 0.5,'Hillary Clinton','Donald Trump')
+}
+
+d = list()
+for (i in 1:614){
+  d[[length(d)+1]] <- predictions2[i,7]
+}
+
+tree.test.error <- calc_error_rate(d, tst.cl$candidate)
+
+records[1,] <- c(tree.train.error, tree.test.error)
+records
+```
+
+## Question 14
+
+
+```{r, warning=FALSE, message=FALSE}
+set.seed(20)
+nfold <- 10
+folds <- sample(cut(1:nrow(trn.cl), breaks=nfold, labels=FALSE))
+
+kvec <- c(1, seq(10, 50, length.out=9))
+
+do.chunk <- function(chunkid, folddef, Xdat, Ydat, k){
+  train = (folddef!=chunkid)
+  Xtr = Xdat[train,]
+  Ytr = Ydat[train]
+  Xvl = Xdat[!train,]
+  Yvl = Ydat[!train]
+
+  predYtr = knn(train = Xtr, test = Xtr, cl = Ytr, k = k)
+  predYvl = knn(train = Xtr, test = Xvl, cl = Ytr, k = k)
+  
+  data.frame(train.error = calc_error_rate(predYtr, Ytr),
+             val.error = calc_error_rate(predYvl, Yvl))
+}
+
+avg.train.error.vec <- c()
+avg.test.error.vec <- c()
+for(i in 1:10) {
+  a = ldply(1:9, 
+            do.chunk, 
+            folddef=folds, 
+            Xdat= dplyr::select(trn.cl,-candidate), 
+            Ydat= trn.cl$candidate, 
+            k=kvec[i])
+  avg.train.error = (a[1,1]+a[2,1]+a[3,1]+a[4,1]+a[5,1]+a[6,1]+a[7,1]+a[8,1]+a[9,1])/9
+  avg.test.error = (a[1,2]+a[2,2]+a[3,2]+a[4,2]+a[5,2]+a[6,2]+a[7,2]+a[8,2]+a[9,2])/9
+  
+  avg.train.error.vec = c(avg.train.error.vec, avg.train.error)
+  avg.test.error.vec = c(avg.test.error.vec, avg.test.error)
+}
+
+knn.test.error <- min(avg.test.error.vec)
+knn.train.error <- avg.train.error.vec[which.min(avg.test.error.vec)]
+records[2,] <- c(knn.train.error, knn.test.error)
+records
+```
+
+
+
+
+
+
+
+## Question 15
+
+```{r, warning=FALSE, message=FALSE}
+pca.records <- matrix(NA, nrow=3, ncol=2)
+colnames(pca.records) <- c("train.error","test.error")
+rownames(pca.records) <- c("tree","knn","lda")
+election.cl2 <- select(election.cl,-candidate)
+election.cl2$TotalPop <- as.numeric(election.cl2$TotalPop)
+election.cl2 <- scale(election.cl2)
+election.cl.pca <- prcomp(election.cl2)
+str(election.cl.pca)
+
+sum.ele.pca <- summary(election.cl.pca)
+sum.var <- 0
+for (i in 1:34){
+  sum.var = sum.ele.pca$importance[2,i] + sum.var
+  if (sum.var>0.9){
+    print(i)
+    break
+  }
+}
+
+var.pca <- election.cl.pca$sdev^2
+proportion <- var.pca/sum(var.pca)
+plot(proportion, 
+     main = "Prop of Var by Number of PCs", 
+     xlab = "Principal Components", 
+     ylab = "Proportion of Variance", 
+     pch = 16, 
+     cex = .75, 
+     col='red')
+
+Cproportion <- cumsum(var.pca)/sum(var.pca)
+plot(Cproportion, 
+     main = "Cumulative Prop of Var by Number of PCs", 
+     xlab = "Principal Components", 
+     ylab = "Proportion of Variance", 
+     pch=16, 
+     cex = .75, 
+     col='red')
+```
+
+Looking at the summary of the PCA matrix we can see that the minimum number of Principal Components in order to accout for 90% of the total variance is 17.
+
+## Question 16
+
+```{r, warning=FALSE, message=FALSE}
+df.election.pca.x <- as.data.frame(election.cl.pca$x)
+data.pca <- cbind(election.cl$candidate, df.election.pca.x)
+data.pca <- as.data.frame(data.pca)
+names(data.pca)[1] <- "candidate"
+
+set.seed(10) 
+n <- nrow(data.pca)
+in.trn <- sample.int(n, 0.8*n) 
+tr.pca <- data.pca[in.trn,]
+test.pca <- data.pca[-in.trn,]
+
+head(tr.pca)
+head(test.pca)
+```
+
+## Some Setups
+
+```{r, warning=FALSE, message=FALSE}
+set.seed(20)
+nfold <- 10
+folds.pca <- sample(cut(1:nrow(trn.cl), breaks=nfold, labels=FALSE))
+calc_error_rate <- function(predicted.value, true.value){
+  return(mean(true.value!=predicted.value))
+}
+records.pca <- matrix(NA, nrow=3, ncol=2)
+colnames(records.pca) = c("train.error.pca","test.error.pca")
+rownames(records.pca) = c("tree","knn","glm")
+```
+
+## Question 17
+
+```{r, fig.width=8, fig.height=8, warning=FALSE, message=FALSE}
+tree.train.pca <- tree(candidate~., data=tr.pca)
+tree.train.control.pca <- tree.control(nobs=3070, minsize = 7, mindev = 1e-6)
+tree.train.pca <- tree(candidate~., data = tr.pca, control = tree.train.control.pca)
+summary(tree.train.pca)
+
+cv.tree.pca <- cv.tree(tree.train.pca, rand=folds, prune.misclass)
+cv.tree.pca
+
+draw.tree(tree.train.pca, nodeinfo=TRUE, cex=.5, size = 0)
+
+
+prunedtree.pca <- prune.tree(tree.train.pca, best=17)
+draw.tree(prunedtree.pca, cex=0.5, nodeinfo=TRUE)
+```
+
+```{r, warning=FALSE, message=FALSE}
+prediction.pca <- predict(prunedtree.pca, tr.pca, type="vector")
+for (i in 1:nrow(tr.pca)){
+  d = prediction.pca[i,7]
+  prediction.pca[i,7] <- ifelse(d < 0.5,'Hillary Clinton','Donald Trump')
+}
+
+c = list()
+for (i in 1:nrow(tr.pca)){
+  c[[length(c)+1]] <- prediction.pca[i,7]
+}
+tree.train.error <- calc_error_rate(c, tr.pca$candidate)
+
+prediction.pca2 <- predict(prunedtree.pca, test.pca, type="vector")
+for (i in 1:nrow(test.pca)){
+  d = prediction.pca2[i,7]
+  prediction.pca2[i,7] <- ifelse(d < 0.5,'Hillary Clinton','Donald Trump')
+}
+
+d = list()
+for (i in 1:nrow(test.pca)){
+  d[[length(d)+1]] <- prediction.pca2[i,7]
+}
+tree.test.error <- calc_error_rate(d, test.pca$candidate)
+
+records.pca[1,] <- c(tree.train.error, tree.test.error)
+records.pca
+```
+
+## Question 18
+
+```{r, warning=FALSE, message=FALSE}
+set.seed(20)
+nfold <- 10
+folds.pca <- sample(cut(1:nrow(trn.cl), breaks=nfold, labels=FALSE))
+
+kvec <- c(1, seq(10, 50, length.out=9))
+
+do.chunk <- function(chunkid, folddef, Xdat, Ydat, k){
+  train = (folddef!=chunkid)
+  Xtr = Xdat[train,]
+  Ytr = Ydat[train]
+  Xvl = Xdat[!train,]
+  Yvl = Ydat[!train]
+
+  predYtr = knn(train = Xtr, test = Xtr, cl = Ytr, k = k)
+  predYvl = knn(train = Xtr, test = Xvl, cl = Ytr, k = k)
+  
+  data.frame(train.error = calc_error_rate(predYtr, Ytr),
+             val.error = calc_error_rate(predYvl, Yvl))
+}
+
+avg.train.error.pca.vec <- c()
+avg.test.error.pca.vec <- c()
+for(i in 1:10) {
+  a = ldply(1:9, 
+            do.chunk, 
+            folddef=folds, 
+            Xdat = dplyr::select(tr.pca,-candidate), 
+            Ydat = tr.pca$candidate, 
+            k=kvec[i])
+  avg.train.error.pca = (a[1,1]+a[2,1]+a[3,1]+a[4,1]+a[5,1]+a[6,1]+a[7,1]+a[8,1]+a[9,1])/9
+  avg.test.error.pca = (a[1,2]+a[2,2]+a[3,2]+a[4,2]+a[5,2]+a[6,2]+a[7,2]+a[8,2]+a[9,2])/9
+  
+  avg.train.error.pca.vec = c(avg.train.error.pca.vec, avg.train.error.pca)
+  avg.test.error.pca.vec = c(avg.test.error.pca.vec, avg.test.error.pca)
+}
+
+knn.test.error.pca <- min(avg.test.error.pca.vec)
+knn.train.error.pca <- avg.train.error.pca.vec[which.min(avg.test.error.pca.vec)]
+
+records.pca[2,] <- c(knn.train.error.pca, knn.test.error.pca)
+records.pca
+```
+
+## Question 19
+
+
+If our goal is to predict the election, we could use time series analysis to forecast the election results. In the dataset we used, the data was collected after the election was done. Typically, prediction of elections and forecasting is done using multiple data points over set periods of time. Many pollsters and data analysts interested in forecasting use many different polls and sampling techniques to model voter behavior. For example, a certain county may come out with a poll predicting voter behavior in their county, depending on how reliable it is we can add it to a model. If we had the resources to get data on polls leading up to the election we could build models on voter behavior relating to other statistics such as approval ratings, how well the economy is doing, stances on big issues, etc.
+
+Although it would be practically difficult to acquire the data, knowing voter preferences based on demographics could lead to more interesting analysis knowing the actual results. For example, if we had more data on race and preferred candidate, we could figure out how much of each demographic voted for Hillary and how much of each demographic voted for Trump with more accuracy. We could figure out how much of each demographic is worth in terms of electoral votes based on demographic size and voter turnout rate per demographic. Using our techniques we can infer voter preference, but it is hard to determine total votes based on a specific demographic. It is difficult to find datasets online in regards to voter demographics when connecting them to actual behavior. If we had our own resources then exit polls and surveys would likely be the best way to connect demographics with voter behavior. Having more detailed data connecting demographics directly to voter beahvior could lead to better model testing.
+
+
+## Question 20
+## Additional Classification Methods: Logistic regression
+
+
+In this question, we are going to use logistic regression method for testing the training error and test error with the original dataset first, and then use the datasets containing PCs to compare the errors.
+
+```{r, warning=FALSE, message=FALSE}
+train.glm.data <- trn.cl
+
+train.glm.data[,1] <- as.character(train.glm.data$candidate)
+train.glm.data[which(train.glm.data$candidate=="Donald Trump"),1] <- 1
+train.glm.data[which(train.glm.data$candidate=="Hillary Clinton"),1] <- 0
+train.glm.data[,1] <- as.numeric(train.glm.data$candidate)
+train.glm.data[,2] <- as.numeric(train.glm.data$TotalPop)
+
+model <- glm(candidate~., data=train.glm.data, family=binomial)
+pred.train <- predict(model, data=train.glm.data, type="response")
+
+pred.train <- ifelse(pred.train > 0.5, 1, 0)
+
+train.error.glm <- calc_error_rate(pred.train, train.glm.data$candidate)
+train.error.glm
+```
+
+First of all, we get our training error for logistic regression which is approximately 7%.
+
+```{r, warning=FALSE, message=FALSE}
+test.glm.data <- tst.cl
+
+test.glm.data[,1] <- as.character(test.glm.data$candidate)
+test.glm.data[which(test.glm.data$candidate=="Donald Trump"),1] <- 1
+test.glm.data[which(test.glm.data$candidate=="Hillary Clinton"),1] <- 0
+test.glm.data[,1] <- as.numeric(test.glm.data$candidate)
+test.glm.data[,2] <- as.numeric(test.glm.data$TotalPop)
+
+pred.test <- predict(model, data=test.glm.data, type="response")
+
+pred.test <- ifelse(pred.test > 0.5, 1, 0)
+
+test.error.glm <- calc_error_rate(pred.test, test.glm.data$candidate)
+test.error.glm
+```
+
+Then, we got our test error for logistic regression which is approximately 24%. Below is the completed records matrix.
+
+```{r}
+records[3,] <- c(train.error.glm, test.error.glm)
+records
+```
+
+Next, we want to find the training and test error with full principle components.
+
+```{r}
+train.glm.pca <- tr.pca
+
+train.glm.pca[,1] <- as.character(train.glm.pca[,1])
+train.glm.pca[which(train.glm.pca$candidate=="Donald Trump"),1] <- 1
+train.glm.pca[which(train.glm.pca$candidate=="Hillary Clinton"),1] <- 0
+train.glm.pca[,1] <- as.numeric(train.glm.pca$candidate)
+
+model.pca <- glm(candidate~., data=train.glm.pca, family=binomial)
+pred.train.pca <- predict(model.pca, data=train.glm.pca, type="response")
+pred.train.pca <- ifelse(pred.train.pca > 0.5, 1, 0)
+
+train.error.glm.pca <- calc_error_rate(pred.train.pca, train.glm.pca$candidate)
+train.error.glm.pca
+
+
+test.glm.pca <- test.pca
+
+test.glm.pca[,1] <- as.character(test.glm.pca[,1])
+test.glm.pca[which(test.glm.pca$candidate=="Donald Trump"),1] <- 1
+test.glm.pca[which(test.glm.pca$candidate=="Hillary Clinton"),1] <- 0
+test.glm.pca[,1] <- as.numeric(test.glm.pca$candidate)
+
+pred.test.pca <- predict(model.pca, data=test.glm.pca, type="response")
+pred.test.pca <- ifelse(pred.train.pca > 0.5, 1, 0)
+
+test.error.glm.pca <- calc_error_rate(pred.test.pca, test.glm.pca$candidate)
+test.error.glm.pca
+```
+
+According to our result, we get the same training error and test error as we use the original dataset, because we are using the full PCs, we have captured 100% of the variance. Below is the completed records.pca matrix.
+
+```{r}
+records.pca[3,] <- c(train.error.glm.pca, test.error.glm.pca)
+records.pca
+```
+
+
